@@ -1,0 +1,140 @@
+# Spotify Playlist Downloader - Default Configuration
+
+# Download Settings
+download:
+  # Audio format: mp3, m4a, flac
+  format: mp3
+  
+  # Quality settings per format (in kbps, or 'lossless' for FLAC)
+  quality:
+    mp3: 320
+    m4a: 256
+    flac: lossless
+  
+  # Number of concurrent downloads
+  concurrent_downloads: 6
+  
+  # Adaptive concurrency settings
+  adaptive_concurrency: true
+  min_concurrent: 3
+  max_concurrent: 8
+  
+  # Retry settings (optimized)
+  retry_attempts: 2
+  retry_delay: 1  # seconds
+  
+  # Timeout for downloads (seconds)
+  timeout: 300
+  
+  # Skip already downloaded tracks
+  skip_existing: true
+
+# Metadata Settings
+metadata:
+  # Embed album artwork
+  embed_artwork: true
+  
+  # Minimum artwork size (pixels)
+  artwork_min_size: 500
+  
+  # Preferred artwork size (pixels)
+  artwork_preferred_size: 1000
+  
+  # Normalize filenames (remove special characters)
+  normalize_filenames: true
+  
+  # Filename template
+  # Available variables: {track_number}, {artist}, {title}, {album}
+  filename_template: "{track_number:02d} - {artist} - {title}"
+
+# YouTube Matching Settings
+youtube:
+  # Browser to extract cookies from (chrome, firefox, edge, safari, etc.)
+  # Set to null or empty string to disable cookie extraction
+  cookiesfrombrowser: chrome
+  
+  # Search query templates (in order of priority)
+  search_templates:
+    - "{artist} - {title} official audio"
+    - "{artist} - {title} audio"
+    - "{artist} {title} lyrics"
+    - "{title} {artist}"
+  
+  # Duration tolerance (seconds)
+  duration_tolerance: 10
+  
+  # Prefer official uploads
+  prefer_official: true
+  
+  # Avoid live performances
+  avoid_live: true
+  
+  # Avoid covers and remixes
+  avoid_covers: true
+
+# File Organization
+organization:
+  # Create playlist directories
+  create_playlist_dirs: true
+  
+  # Generate M3U playlists
+  generate_m3u: true
+  
+  # Handle duplicate tracks
+  # Options: skip, rename, overwrite
+  duplicate_handling: rename
+
+# Logging Settings
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: INFO
+  
+  # Log to file
+  log_to_file: true
+  
+  # Log file path
+  log_file: spotify_downloader.log
+  
+  # Log format
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # Separate log for failed tracks
+  failed_tracks_log: failed_tracks.log
+
+# Progress Display
+progress:
+  # Show progress bars
+  show_progress: true
+  
+  # Show download speed
+  show_speed: true
+  
+  # Show ETA
+  show_eta: true
+  
+  # Use colored output
+  colored_output: true
+
+# Cache Settings
+cache:
+  # Enable caching
+  enabled: true
+  
+  # Cache directory
+  directory: .cache
+  
+  # Cache TTL (seconds) - 86400 = 24 hours for YouTube URLs
+  ttl: 86400
+
+# Rate Limiting
+rate_limit:
+  # Spotify API calls per minute
+  spotify_calls_per_minute: 100
+  
+  # YouTube API calls per minute
+  youtube_calls_per_minute: 60
+  
+  # Download rate limit (MB/s, 0 for unlimited)
+  download_rate_limit: 0
+
+# Made with Bob

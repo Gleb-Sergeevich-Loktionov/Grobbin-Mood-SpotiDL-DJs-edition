@@ -1,0 +1,15 @@
+# Spotify Playlists to Download
+# Add one playlist URL per line
+# Lines starting with # are comments and will be ignored
+
+# Playlist 1
+https://open.spotify.com/playlist/7ooZ1OdYCD6wibrLAfrgXS?si=7e86e44e35074709
+
+# Playlist 2
+https://open.spotify.com/playlist/1qDQSeWk8pqxIX9VMJiPDy?si=30e5c19fa4bd4195
+
+# Playlist 3
+https://open.spotify.com/playlist/0UGwu4ZdLZkt0Hv5ZpsheT?si=81ad92220ba34a77
+
+# Playlist 4
+https://open.spotify.com/playlist/11dGHFHktXtU00aDUtJQig?si=6ae0f1e75539439e

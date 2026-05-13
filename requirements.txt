@@ -1,0 +1,45 @@
+# Spotify Playlist Downloader - Dependencies
+# Core dependencies with pinned versions for production stability
+
+# Spotify API Integration
+spotipy==2.23.0
+
+# YouTube Download
+yt-dlp==2023.10.13
+
+# Audio Metadata Handling
+mutagen==1.47.0
+
+# Image Processing (for artwork)
+Pillow==10.1.0
+
+# HTTP Requests
+requests==2.31.0
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Configuration Files
+PyYAML==6.0.1
+
+# Progress Bars
+tqdm==4.66.1
+
+# Colored Terminal Output
+colorama==0.4.6
+
+# Retry Logic with Exponential Backoff
+tenacity==8.2.3
+
+# Rate Limiting
+ratelimit==2.2.1
+
+# Dependency Injection
+dependency-injector==4.49.0
+
+# Development Dependencies (optional, install with: pip install -r requirements-dev.txt)
+# pytest>=7.4.0
+# pytest-cov>=4.1.0
+# black>=23.0.0
+# flake8>=6.0.0
+# mypy>=1.5.0
