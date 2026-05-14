@@ -135,7 +135,7 @@ python main.py --help
 В текущей версии файлы появляются здесь:
 
 ```text
-C:\Users\Глеб\Music\Spotifydown\app\downloads
+~Grobbin-Mood-SpotiDL-DJs-edition\downloads
 ```
 
 Структура:
@@ -262,7 +262,7 @@ main
 ## Короткий рабочий сценарий
 
 ```powershell
-cd C:\Users\Глеб\Music\Spotifydown\app
+cd ~Grobbin-Mood-SpotiDL-DJs-edition\
 python -m pip install -r requirements.txt
 python main.py --setup
 notepad playlists.txt
