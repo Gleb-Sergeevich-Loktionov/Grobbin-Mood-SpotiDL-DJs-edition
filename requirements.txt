@@ -5,16 +5,20 @@
 spotipy==2.23.0
 
 # YouTube Download
-yt-dlp==2023.10.13
+yt-dlp>=2024.8.0
 
 # Audio Metadata Handling
 mutagen==1.47.0
 
 # Image Processing (for artwork)
-Pillow==10.1.0
+# >=11.3 required for Python 3.13/3.14 wheels (10.1.0 fails to build on 3.14).
+Pillow>=11.3.0
+
+# Transliteration for match relevance (Cyrillic/Greek/etc. -> ASCII)
+Unidecode>=1.3.0
 
 # HTTP Requests
-requests==2.31.0
+requests>=2.32.2,<3
 
 # Environment Variables
 python-dotenv==1.0.0

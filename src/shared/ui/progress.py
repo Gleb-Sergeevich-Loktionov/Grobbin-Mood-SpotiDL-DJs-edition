@@ -323,27 +323,33 @@ class ProgressTracker:
         self.overall_pbar.set_postfix_str(summary)
         self.overall_pbar.refresh()
     
-    def display_final_summary(self) -> None:
+    def display_final_summary(self, successful: int = None, failed: int = None, skipped: int = 0) -> None:
         """Display final summary of all downloads."""
+        successful = self.total_completed if successful is None else successful
+        failed = self.total_failed if failed is None else failed
+
         total_elapsed = time.time() - self.start_time
         from src.shared.lib.utils import format_duration
-        
+
         print("\n" + "=" * 60)
         print(self._colorize("Download Summary", Fore.CYAN, Style.BRIGHT))
         print("=" * 60)
-        
+
         print(f"Total playlists processed: {self.current_playlist}/{self.total_playlists}")
-        print(f"{self._colorize('[OK] Successfully downloaded:', Fore.GREEN)} {self.total_completed} tracks")
-        
-        if self.total_failed > 0:
-            print(f"{self._colorize('[FAIL] Failed downloads:', Fore.RED)} {self.total_failed} tracks")
-        
+        print(f"{self._colorize('[OK] Successfully downloaded:', Fore.GREEN)} {successful} tracks")
+
+        if failed > 0:
+            print(f"{self._colorize('[FAIL] Failed downloads:', Fore.RED)} {failed} tracks")
+
+        if skipped > 0:
+            print(f"{self._colorize('[SKIP] Skipped (already downloaded):', Fore.YELLOW)} {skipped} tracks")
+
         print(f"⏱ Total time: {format_duration(int(total_elapsed))}")
-        
-        if self.total_completed > 0:
-            avg_time = total_elapsed / self.total_completed
+
+        if successful > 0:
+            avg_time = total_elapsed / successful
             print(f"⚡ Average time per track: {format_duration(int(avg_time))}")
-        
+
         print("=" * 60)
     
     def _print_playlist_header(self) -> None:

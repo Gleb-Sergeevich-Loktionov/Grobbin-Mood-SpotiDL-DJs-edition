@@ -160,8 +160,8 @@ class DownloadManager:
             
             # Create playlist directory
             playlist_dir = self.file_manager.create_playlist_directory(playlist_info.name)
-            logger.info(f"[DEBUG] Playlist directory created/retrieved: {playlist_dir}")
-            logger.info(f"[DEBUG] Playlist directory exists: {playlist_dir.exists()}")
+            logger.debug(f"Playlist directory created/retrieved: {playlist_dir}")
+            logger.debug(f"Playlist directory exists: {playlist_dir.exists()}")
             
             # Check for resume state
             resume_state = self.file_manager.load_resume_state(playlist_info.id)
@@ -326,7 +326,7 @@ class DownloadManager:
             # Start track progress
             self.progress_tracker.start_track(track_name)
             
-            logger.info(f"[DEBUG] Received playlist_dir for track: {playlist_dir}")
+            logger.debug(f"Received playlist_dir for track: {playlist_dir}")
             
             # Generate output path FIRST (before YouTube search)
             output_path = self.file_manager.get_output_path(
@@ -337,8 +337,8 @@ class DownloadManager:
                 self.download_settings['format'],
                 self.metadata_settings['filename_template']
             )
-            logger.info(f"[DEBUG] Generated output_path: {output_path}")
-            logger.info(f"[DEBUG] Output path parent directory: {output_path.parent}")
+            logger.debug(f"Generated output_path: {output_path}")
+            logger.debug(f"Output path parent directory: {output_path.parent}")
             
             # CRITICAL: Check if file already exists BEFORE YouTube search
             # This prevents unnecessary API calls and duplicate downloads
@@ -361,7 +361,7 @@ class DownloadManager:
                 return False
             
             logger.info(f"Found YouTube match: {youtube_url}")
-            logger.info(f"[DEBUG] Final output_path before yt-dlp: {output_path}")
+            logger.debug(f"Final output_path before yt-dlp: {output_path}")
             
             # Download with yt-dlp
             success = self._download_with_ytdlp(youtube_url, output_path)
@@ -376,7 +376,16 @@ class DownloadManager:
                 self.file_manager.delete_file(output_path)
                 self.progress_tracker.complete_track(False, "Invalid file")
                 return False
-            
+
+            # Final correctness guard: the downloaded audio length must match the
+            # Spotify track. Catches any wrong-track download that slipped past the
+            # search-time duration gate, so we never keep a mismatched file.
+            if not self._verify_audio_duration(output_path, track):
+                logger.error(f"Duration mismatch — wrong track downloaded, discarding: {track_name}")
+                self.file_manager.delete_file(output_path)
+                self.progress_tracker.complete_track(False, "Duration mismatch (wrong track)")
+                return False
+
             # Embed metadata
             artwork_url = track.album_art_url
             metadata_success = self.metadata_handler.embed_metadata(
@@ -397,6 +406,44 @@ class DownloadManager:
             self.progress_tracker.complete_track(False, str(e))
             return False
     
+    def _verify_audio_duration(self, file_path: Path, track: SpotifyTrack) -> bool:
+        """Check the downloaded file's duration is close to the Spotify track.
+
+        Returns True when within tolerance, when the track duration is unknown, or
+        when the file's duration cannot be read (validate_file already confirmed a
+        non-empty audio file — don't discard purely because mutagen can't parse it).
+        Returns False only on a confirmed, out-of-tolerance mismatch.
+        """
+        track_duration = (track.duration_ms or 0) / 1000.0
+        if track_duration <= 0:
+            return True
+
+        try:
+            import mutagen
+            audio = mutagen.File(str(file_path))
+            file_duration = getattr(getattr(audio, 'info', None), 'length', None)
+        except Exception as e:
+            logger.debug(f"Could not read duration for {file_path.name}: {e}")
+            return True
+
+        if file_duration is None:
+            return True  # parser could not determine length — don't discard
+        if file_duration <= 0:
+            logger.debug(f"Mutagen reported zero duration for {file_path.name}; skipping duration check")
+            return True
+
+        # A bit more lenient than the search gate: real audio rips may carry short
+        # intros/outros, but a different song is off by far more.
+        tolerance = max(self.download_settings.get('duration_tolerance', 20), 20)
+        diff = abs(file_duration - track_duration)
+        if diff > tolerance:
+            logger.warning(
+                f"Downloaded duration {file_duration:.0f}s vs expected {track_duration:.0f}s "
+                f"(diff {diff:.0f}s > {tolerance}s)"
+            )
+            return False
+        return True
+
     def _check_existing_file(self, file_path: Path) -> Optional[Path]:
         """
         Check if file already exists, including variations with suffixes like (1), (2), etc.

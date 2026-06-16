@@ -3,6 +3,8 @@ Metadata handling for audio files.
 Embeds ID3v2 tags and album artwork.
 """
 
+from __future__ import annotations
+
 import requests
 from pathlib import Path
 from typing import Optional
@@ -63,7 +65,7 @@ class MetadataHandler:
         try:
             # Download artwork if enabled
             artwork_data = None
-            if self.settings.get('embed_artwork', True) and artwork_url:
+            if self.settings.get('download_artwork', True) and artwork_url:
                 artwork_data = self.download_artwork(artwork_url)
             
             # Determine file format and embed metadata
@@ -86,7 +88,7 @@ class MetadataHandler:
     def _embed_mp3_metadata(
         self,
         file_path: Path,
-        track: Track,
+        track: SpotifyTrack,
         artwork_data: Optional[bytes]
     ) -> bool:
         """Embed metadata into MP3 file."""
@@ -138,7 +140,7 @@ class MetadataHandler:
     def _embed_m4a_metadata(
         self,
         file_path: Path,
-        track: Track,
+        track: SpotifyTrack,
         artwork_data: Optional[bytes]
     ) -> bool:
         """Embed metadata into M4A file."""
@@ -176,7 +178,7 @@ class MetadataHandler:
     def _embed_flac_metadata(
         self,
         file_path: Path,
-        track: Track,
+        track: SpotifyTrack,
         artwork_data: Optional[bytes]
     ) -> bool:
         """Embed metadata into FLAC file."""
@@ -411,6 +413,6 @@ class MetadataHandler:
     
     def __repr__(self) -> str:
         """String representation."""
-        return f"MetadataHandler(embed_artwork={self.settings.get('embed_artwork')})"
+        return f"MetadataHandler(download_artwork={self.settings.get('download_artwork')})"
 
 # Made with Bob

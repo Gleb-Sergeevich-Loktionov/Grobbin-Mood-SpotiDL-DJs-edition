@@ -30,7 +30,7 @@ class SpotifyClient:
     Базовый клиент, который используется репозиториями.
     """
     
-    def __init__(self, client_id: str, client_secret: str, redirect_uri: str = "http://127.0.0.1:9900/"):
+    def __init__(self, client_id: str, client_secret: str, redirect_uri: str = "http://localhost:8888/callback"):
         """
         Инициализация Spotify клиента.
         

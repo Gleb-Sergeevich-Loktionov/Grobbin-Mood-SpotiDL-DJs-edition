@@ -10,8 +10,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -92,8 +92,8 @@ temp/
 tmp/
 count_tracks.py
 cleanup_*.py
-test_*.py
-test_*.txt
+/test_*.py
+/test_*.txt
 
 # Development documentation
 *_SUMMARY.md

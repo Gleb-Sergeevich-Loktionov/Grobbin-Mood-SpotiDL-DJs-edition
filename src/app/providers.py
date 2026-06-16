@@ -137,21 +137,9 @@ class Container(containers.DeclarativeContainer):
         ttl=86400  # 24 часа в секундах (можно сделать config.cache.ttl если нужно)
     )
     
-    # YouTube Matcher (обновленный путь)
-    youtube_matcher = providers.Factory(
-        "src.features.download.infrastructure.youtube_matcher.YouTubeMatcher",
-        config=app_config
-    )
-    
     # Matching Strategy
     matching_strategy = providers.Singleton(
         "src.features.download.domain.strategies.MatchingStrategyFactory"
-    )
-    
-    # Metadata Handler (обновленный путь)
-    metadata_handler = providers.Factory(
-        "src.features.metadata.infrastructure.metadata_handler.MetadataHandler",
-        config=app_config
     )
     
     # File Manager (обновленный путь)
@@ -293,11 +281,11 @@ def create_container(config_path: Optional[str] = None) -> Container:
                 "redirect_uri": os.getenv("SPOTIPY_REDIRECT_URI", "http://localhost:8888/callback")
             },
             "download": {
-                "output_dir": "downloads",
-                "format": "mp3",
-                "quality": "320",
-                "max_retries": 3,
-                "max_concurrent": 3
+                "output_dir": os.getenv("DEFAULT_OUTPUT_DIR", "downloads"),
+                "format": os.getenv("DEFAULT_AUDIO_FORMAT", "mp3"),
+                "quality": os.getenv("DEFAULT_AUDIO_QUALITY", "320"),
+                "max_retries": int(os.getenv("RETRY_ATTEMPTS", "3")),
+                "max_concurrent": int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3"))
             },
             "cache": {
                 "spotify_dir": ".spotify_cache",
