@@ -10,7 +10,18 @@ from src.features.spotify.domain.repositories import SpotifyTrack
 from src.shared.lib.utils import clean_search_query
 from src.shared.lib.cache import YouTubeCache
 
+try:
+    from unidecode import unidecode
+except Exception:  # pragma: no cover - graceful fallback if dep missing
+    def unidecode(text: str) -> str:
+        return text
+
 logger = logging.getLogger(__name__)
+
+# A YouTube result we cannot length-verify, or whose length differs from the
+# Spotify track by more than this many seconds, is treated as a different track
+# and rejected. Correctness over recall: better to skip than grab the wrong song.
+DURATION_GATE_SECONDS = 15
 
 
 class YouTubeMatcher:
@@ -167,8 +178,12 @@ class YouTubeMatcher:
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
-            'extract_flat': True,
-            'default_search': 'ytsearch5',  # Get top 5 results
+            # extract_flat MUST stay False: flat search results omit 'duration'
+            # and 'view_count', the exact fields needed to verify a result is the
+            # right track. With them missing every result scored ~0 and an
+            # unrelated video was accepted — the root cause of wrong downloads.
+            'extract_flat': False,
+            'skip_download': True,
         }
         
         try:
@@ -203,48 +218,113 @@ class YouTubeMatcher:
         """
         if not results:
             return None
-        
-        scored_results = []
-        
-        # Логирование всех результатов для отладки
-        logger.debug(f"Analyzing {len(results)} search results for '{track.artist} - {track.name}'")
-        
+
+        track_duration = (track.duration_ms or 0) / 1000.0
+        tolerance = self.settings.get('duration_tolerance', DURATION_GATE_SECONDS)
+
+        if track_duration <= 0:
+            logger.warning(
+                f"No Spotify duration for '{track.artist} - {track.name}'; "
+                f"duration gate disabled, relying on title+artist gate only"
+            )
+
+        eligible = []
+        rejected = 0
+        logger.debug(
+            f"Analyzing {len(results)} results for '{track.artist} - {track.name}' "
+            f"(expected {track_duration:.0f}s)"
+        )
+
         for idx, video in enumerate(results):
             if not video:
                 continue
-            
+
+            title = video.get('title') or ''
+            duration = video.get('duration') or 0
+
+            # HARD GATE 1 — duration must be verifiable and close. Spotify always
+            # provides duration_ms; a result we cannot length-check, or whose
+            # length is off, is almost certainly a different track.
+            if track_duration > 0:
+                if not duration:
+                    rejected += 1
+                    logger.debug(f"  reject #{idx + 1} (no duration): '{title}'")
+                    continue
+                if abs(duration - track_duration) > tolerance:
+                    rejected += 1
+                    logger.debug(
+                        f"  reject #{idx + 1} (duration {duration}s vs {track_duration:.0f}s): '{title}'"
+                    )
+                    continue
+
+            # HARD GATE 2 — the title must actually reference this track, so a
+            # coincidentally same-length but unrelated video is never accepted.
+            uploader = video.get('uploader') or video.get('channel') or ''
+            if not self._has_text_relevance(title, track, uploader):
+                rejected += 1
+                logger.debug(f"  reject #{idx + 1} (title unrelated): '{title}'")
+                continue
+
             score = self._calculate_match_score(video, track)
-            video_title = video.get('title', 'Unknown')
-            video_duration = video.get('duration', 0)
-            
-            # Детальное логирование каждого результата
-            logger.debug(f"  Result #{idx + 1}: score={score:.1f}, duration={video_duration}s, title='{video_title}'")
-            
-            scored_results.append((score, video))
-        
-        if not scored_results:
-            logger.warning(f"No valid results found for '{track.artist} - {track.name}'")
+            eligible.append((score, video))
+            logger.debug(f"  candidate #{idx + 1} score={score:.1f} duration={duration}s: '{title}'")
+
+        if not eligible:
+            logger.warning(
+                f"No track-correct match for '{track.artist} - {track.name}': "
+                f"{len(results)} results, {rejected} rejected by duration/title gates"
+            )
             return None
-        
-        # Sort by score (highest first)
-        scored_results.sort(key=lambda x: x[0], reverse=True)
-        
-        # Return best match if score is above threshold
-        best_score, best_video = scored_results[0]
-        
-        # Более мягкий порог для редких треков
-        if best_score > -15:  # Было: > 0
-            if best_score < 0:
-                logger.warning(f"Low confidence match (score: {best_score:.1f}) for {track.artist} - {track.name}")
-                logger.warning(f"  Selected video: '{best_video.get('title', 'Unknown')}'")
-            else:
-                logger.info(f"Good match found (score: {best_score:.1f}) for {track.artist} - {track.name}")
-            
-            return best_video
-        
-        logger.warning(f"No acceptable match found (best score: {best_score:.1f}) for '{track.artist} - {track.name}'")
-        return None
-    
+
+        # Rank the eligible (already track-correct) candidates by quality score.
+        eligible.sort(key=lambda x: x[0], reverse=True)
+        best_score, best_video = eligible[0]
+        logger.info(
+            f"Match (score {best_score:.1f}) for '{track.artist} - {track.name}': "
+            f"'{best_video.get('title', 'Unknown')}'"
+        )
+        return best_video
+
+    @staticmethod
+    def _word_set(text: str) -> set:
+        """Whole-word token set, transliterated to ASCII and lowercased."""
+        return set(re.findall(r'\w+', unidecode(text or '').lower()))
+
+    @staticmethod
+    def _word_list(text: str, min_len: int) -> List[str]:
+        """Ordered whole-word tokens of at least `min_len` chars (ASCII, lower)."""
+        return [w for w in re.findall(r'\w+', unidecode(text or '').lower()) if len(w) >= min_len]
+
+    def _has_text_relevance(self, title: str, track: SpotifyTrack, uploader: str = '') -> bool:
+        """Return True if the video plausibly refers to this track.
+
+        Two requirements, both transliterated to ASCII (so Cyrillic/Greek/etc.
+        track names match Latin-transliterated YouTube titles) and matched on
+        whole words (so 'in' does not match inside 'living'):
+          1. at least 60% of the track-title words appear in the video title;
+          2. the primary artist appears in the video title OR the uploader/channel
+             (the latter covers auto-generated "Topic" uploads whose visible title
+             omits the artist).
+        """
+        title_set = self._word_set(title)
+        uploader_set = self._word_set(uploader)
+
+        title_words = self._word_list(track.name, min_len=2) or self._word_list(track.name, min_len=1)
+        artist_words = self._word_list(track.artist, min_len=2) or self._word_list(track.artist, min_len=1)
+
+        if not title_words:
+            return False
+
+        title_hits = sum(1 for w in title_words if w in title_set)
+        title_ratio = title_hits / len(title_words)
+
+        if artist_words:
+            artist_present = any(w in title_set or w in uploader_set for w in artist_words)
+        else:
+            artist_present = True
+
+        return title_ratio >= 0.6 and artist_present
+
     def _calculate_match_score(self, video: Dict[str, Any], track: SpotifyTrack) -> float:
         """
         Calculate match score for a video.
@@ -265,7 +345,7 @@ class YouTubeMatcher:
         if duration and track.duration_ms:
             track_duration = track.duration_ms / 1000  # Convert ms to seconds
             duration_diff = abs(duration - track_duration)
-            tolerance = self.settings.get('duration_tolerance', 10)
+            tolerance = self.settings.get('duration_tolerance', DURATION_GATE_SECONDS)
             
             if duration_diff <= tolerance:
                 # Perfect match
@@ -311,6 +391,21 @@ class YouTubeMatcher:
                     score -= 10.0
             if 'instrumental' in title and 'instrumental' not in track.name.lower():
                 score -= 15.0
+
+        # Prefer the original studio recording over alternate renditions, unless
+        # the track itself is that kind of version. Ranking-only: every candidate
+        # here already passed the duration + title gates (same song), so this just
+        # nudges the original ahead of piano/acoustic/8-bit/etc. re-recordings.
+        alt_version_markers = [
+            'piano', 'pianoforte', 'acoustic', 'orchestral', 'symphonic',
+            '8 bit', '8-bit', 'nightcore', 'sped up', 'slowed', 'reverb',
+            'metal version', 'cover version',
+        ]
+        track_lower = track.name.lower()
+        for marker in alt_version_markers:
+            if marker in title and marker not in track_lower:
+                score -= 15.0
+                break
         
         # Prefer videos with "audio" in title
         if 'audio' in title:

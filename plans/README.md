@@ -67,6 +67,30 @@ Update Status as each plan completes (TODO → DONE / BLOCKED).
 
 > **Plan 003 follow-up:** `.gitignore` lines `lib/`/`lib64/` also had to be anchored to `/lib/`/`/lib64/` — unanchored they matched `src/shared/lib/` and silently excluded the new package from `git add` (root cause of the original breakage).
 
+## Round 3 — wrong-track matching fix (#15, DONE)
+
+Direct fix outside the numbered-plan flow (reported live by the user: tracks
+downloaded were *completely different songs*, not just wrong versions).
+
+- **Root cause:** `youtube_matcher.py` searched with `extract_flat: True`, so
+  results lacked `duration`/`view_count`; every result scored ~0 and
+  `_find_best_match` accepted anything with `score > -15` → an arbitrary unrelated
+  video was picked.
+- **Fix:** `extract_flat: False` (durations now available) + two hard gates in
+  `_find_best_match` — duration within tolerance AND title/artist relevance
+  (`_has_text_relevance`, whole-word + ASCII transliteration so Cyrillic/Greek
+  names match Latin-transliterated titles; artist required in title or uploader).
+  Returns `None` (skip) when nothing qualifies — skip beats wrong. Alt-version
+  penalty (piano/acoustic/8-bit/…) prefers the original studio cut. Plus a
+  post-download duration guard in `download_manager._verify_audio_duration`.
+- **Verified:** 13 offline regression tests (`tests/test_youtube_matching.py`,
+  incl. wrong-duration, unrelated-title, substring, single-word, Cyrillic, version
+  preference) and a live YouTube run (Rick Astley / a-ha / Nirvana selected the
+  correct original within seconds of the Spotify duration).
+- **E2E tool:** `scripts/e2e_verify.py` — run with your `.env` creds to verify a
+  whole playlist matches (`python scripts/e2e_verify.py <playlist_url>`).
+- Also bumped `Pillow` (10.1.0 fails to build on Python 3.14) and added `Unidecode`.
+
 ## Deferred findings (no plan)
 
 All five round-1 deferred findings (#10–#14) are now planned as 009–013. None remain
