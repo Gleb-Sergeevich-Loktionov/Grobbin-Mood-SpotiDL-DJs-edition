@@ -407,7 +407,8 @@ Examples:
         """Download all playlists."""
         total_successful = 0
         total_failed = 0
-        
+        total_skipped = 0
+
         for i, playlist_url in enumerate(playlist_urls, 1):
             if shutdown_requested:
                 print("\n[WARNING] Shutdown requested, stopping...")
@@ -419,6 +420,7 @@ Examples:
                 result = self.download_manager.download_playlist(playlist_url)
                 total_successful += result.successful
                 total_failed += result.failed
+                total_skipped += result.skipped
                 
                 # Log failed tracks
                 if result.failed_tracks:
@@ -430,7 +432,11 @@ Examples:
         
         # Display final summary
         if not args.quiet:
-            self.progress_tracker.display_final_summary()
+            self.progress_tracker.display_final_summary(
+                successful=total_successful,
+                failed=total_failed,
+                skipped=total_skipped,
+            )
             
             if total_failed > 0:
                 print(f"\nWARNING: {total_failed} track(s) failed. See failed_tracks.log for details.")
@@ -543,8 +549,7 @@ def main():
         
     except Exception as e:
         print(f"\n❌ Критическая ошибка: {e}")
-        import traceback
-        traceback.print_exc()
+        logging.getLogger(__name__).debug("Critical error traceback", exc_info=True)
         return 1
 
 

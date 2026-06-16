@@ -160,8 +160,8 @@ class DownloadManager:
             
             # Create playlist directory
             playlist_dir = self.file_manager.create_playlist_directory(playlist_info.name)
-            logger.info(f"[DEBUG] Playlist directory created/retrieved: {playlist_dir}")
-            logger.info(f"[DEBUG] Playlist directory exists: {playlist_dir.exists()}")
+            logger.debug(f"Playlist directory created/retrieved: {playlist_dir}")
+            logger.debug(f"Playlist directory exists: {playlist_dir.exists()}")
             
             # Check for resume state
             resume_state = self.file_manager.load_resume_state(playlist_info.id)
@@ -326,7 +326,7 @@ class DownloadManager:
             # Start track progress
             self.progress_tracker.start_track(track_name)
             
-            logger.info(f"[DEBUG] Received playlist_dir for track: {playlist_dir}")
+            logger.debug(f"Received playlist_dir for track: {playlist_dir}")
             
             # Generate output path FIRST (before YouTube search)
             output_path = self.file_manager.get_output_path(
@@ -337,8 +337,8 @@ class DownloadManager:
                 self.download_settings['format'],
                 self.metadata_settings['filename_template']
             )
-            logger.info(f"[DEBUG] Generated output_path: {output_path}")
-            logger.info(f"[DEBUG] Output path parent directory: {output_path.parent}")
+            logger.debug(f"Generated output_path: {output_path}")
+            logger.debug(f"Output path parent directory: {output_path.parent}")
             
             # CRITICAL: Check if file already exists BEFORE YouTube search
             # This prevents unnecessary API calls and duplicate downloads
@@ -361,7 +361,7 @@ class DownloadManager:
                 return False
             
             logger.info(f"Found YouTube match: {youtube_url}")
-            logger.info(f"[DEBUG] Final output_path before yt-dlp: {output_path}")
+            logger.debug(f"Final output_path before yt-dlp: {output_path}")
             
             # Download with yt-dlp
             success = self._download_with_ytdlp(youtube_url, output_path)

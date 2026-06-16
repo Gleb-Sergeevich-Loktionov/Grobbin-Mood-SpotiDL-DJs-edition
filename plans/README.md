@@ -52,11 +52,11 @@ only edits the live file). 011 is the only non-trivial one — read its escape h
 | 006  | CLI overrides no-op + output dir | M | Low | DONE |
 | 007  | duplicate DI providers | S | Low | DONE |
 | 008  | stale deps (yt-dlp/requests) | S | Med | DONE |
-| 009  | dead artwork toggle (#10) | S | Low | TODO |
-| 010  | DEBUG noise + traceback dump (#11) | S | Low | TODO |
-| 011  | summary undercounts skipped (#12) | M | Low | TODO |
-| 012  | dead top-level modules (#13) | S | Med | TODO |
-| 013  | OAuth redirect_uri mismatch (#14) | S | Low | TODO |
+| 009  | dead artwork toggle (#10) | S | Low | DONE |
+| 010  | DEBUG noise + traceback dump (#11) | S | Low | DONE |
+| 011  | summary undercounts skipped (#12) | M | Low | DONE |
+| 012  | dead top-level modules (#13) | S | Med | DONE |
+| 013  | OAuth redirect_uri mismatch (#14) | S | Low | DONE |
 
 Update Status as each plan completes (TODO → DONE / BLOCKED).
 
