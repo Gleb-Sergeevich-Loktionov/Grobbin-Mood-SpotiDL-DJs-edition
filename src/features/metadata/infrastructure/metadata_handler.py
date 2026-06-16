@@ -3,6 +3,8 @@ Metadata handling for audio files.
 Embeds ID3v2 tags and album artwork.
 """
 
+from __future__ import annotations
+
 import requests
 from pathlib import Path
 from typing import Optional
@@ -86,7 +88,7 @@ class MetadataHandler:
     def _embed_mp3_metadata(
         self,
         file_path: Path,
-        track: Track,
+        track: SpotifyTrack,
         artwork_data: Optional[bytes]
     ) -> bool:
         """Embed metadata into MP3 file."""
@@ -138,7 +140,7 @@ class MetadataHandler:
     def _embed_m4a_metadata(
         self,
         file_path: Path,
-        track: Track,
+        track: SpotifyTrack,
         artwork_data: Optional[bytes]
     ) -> bool:
         """Embed metadata into M4A file."""
@@ -176,7 +178,7 @@ class MetadataHandler:
     def _embed_flac_metadata(
         self,
         file_path: Path,
-        track: Track,
+        track: SpotifyTrack,
         artwork_data: Optional[bytes]
     ) -> bool:
         """Embed metadata into FLAC file."""

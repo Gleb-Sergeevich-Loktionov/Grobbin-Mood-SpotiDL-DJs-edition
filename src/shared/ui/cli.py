@@ -283,10 +283,39 @@ Examples:
         return parser.parse_args()
     
     def apply_cli_overrides(self, args: argparse.Namespace) -> None:
-        """Apply command-line argument overrides to config."""
-        # This would update the config object based on CLI args
-        # Implementation depends on config structure
-        pass
+        """Apply command-line argument overrides to config and live components.
+
+        The DI container builds config and the download manager before args are
+        parsed, so overrides must update both the config object and the already-
+        constructed download_manager's snapshotted settings.
+        """
+        cfg = self.config
+
+        if args.output:
+            cfg.download.output_dir = Path(args.output)
+            if self.download_manager and getattr(self.download_manager, "file_manager", None):
+                self.download_manager.file_manager.base_output_dir = Path(args.output)
+
+        if args.format:
+            cfg.download.format = args.format
+            if self.download_manager:
+                self.download_manager.download_settings['format'] = args.format
+
+        if args.quality:
+            cfg.download.quality = args.quality
+            if self.download_manager:
+                self.download_manager.download_settings['quality'] = args.quality
+
+        if args.concurrent:
+            cfg.download.max_concurrent = args.concurrent
+            if self.download_manager:
+                self.download_manager.download_settings['concurrent_downloads'] = args.concurrent
+                self.download_manager.download_settings['max_concurrent'] = args.concurrent
+
+        if args.skip_existing or args.resume:
+            cfg.download.skip_existing = True
+            if self.download_manager:
+                self.download_manager.download_settings['skip_existing'] = True
     
     def setup_logging(self, args: argparse.Namespace) -> None:
         """Setup logging configuration."""
@@ -445,10 +474,13 @@ Examples:
             
             # Try to load config
             try:
-                from src.app.config import load_config
-                config = load_config()
-                
-                if config.spotify.client_id and config.spotify.client_secret:
+                import os
+                from dotenv import load_dotenv
+                load_dotenv()
+                client_id = os.getenv("SPOTIPY_CLIENT_ID", "")
+                client_secret = os.getenv("SPOTIPY_CLIENT_SECRET", "")
+
+                if client_id and client_secret:
                     print(f"{Fore.GREEN}✓ Spotify credentials настроены{Style.RESET_ALL}")
                 else:
                     print(f"{Fore.YELLOW}✗ Spotify credentials не найдены{Style.RESET_ALL}")

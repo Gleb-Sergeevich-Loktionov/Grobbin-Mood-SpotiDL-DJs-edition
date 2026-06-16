@@ -20,7 +20,7 @@ class SetupWizard:
     
     def __init__(self):
         """Initialize setup wizard."""
-        self.root_dir = Path(__file__).parent.parent
+        self.root_dir = Path(__file__).resolve().parents[3]
         self.env_file = self.root_dir / ".env"
         self.env_example = self.root_dir / ".env.example"
         self.config = {}
