@@ -160,3 +160,180 @@ def test_picks_original_over_alternate_version():
          "duration": 213, "view_count": 1_000_000_000},
     ]
     assert m._find_best_match(results, track)["id"] == "orig"
+
+
+# --- Version-equality hard gate (plan 014) -----------------------------------
+
+def test_original_rejects_remix_candidate():
+    # Spotify track is the original 'Stay'; a remix must NOT be accepted even
+    # though it is the same song at a similar length.
+    m = _matcher()
+    track = _track(name="Stay", artist="Officer John", duration_ms=200000)
+    results = [{"id": "remix", "title": "Officer John - Stay (Morgan Buckley Remix)",
+                "duration": 201, "view_count": 5_000_000}]
+    assert m._find_best_match(results, track) is None
+
+
+def test_original_accepts_plain_original():
+    m = _matcher()
+    track = _track(name="Stay", artist="Officer John", duration_ms=200000)
+    results = [{"id": "orig", "title": "Officer John - Stay (Official Audio)",
+                "duration": 200, "view_count": 1_000_000}]
+    assert m._find_best_match(results, track)["id"] == "orig"
+
+
+def test_remix_track_rejects_plain_original():
+    m = _matcher()
+    track = _track(name="Stay (Morgan Buckley Remix)", artist="Officer John",
+                   duration_ms=240000)
+    results = [{"id": "orig", "title": "Officer John - Stay", "duration": 239}]
+    assert m._find_best_match(results, track) is None
+
+
+def test_remix_track_accepts_matching_remix():
+    m = _matcher()
+    track = _track(name="Stay (Morgan Buckley Remix)", artist="Officer John",
+                   duration_ms=240000)
+    results = [{"id": "rx", "title": "Officer John - Stay (Morgan Buckley Remix)",
+                "duration": 241, "view_count": 200_000}]
+    assert m._find_best_match(results, track)["id"] == "rx"
+
+
+def test_neutral_qualifiers_do_not_block_original():
+    # feat / official / audio / explicit are NOT versions.
+    m = _matcher()
+    track = _track(name="Stay", artist="Officer John", duration_ms=200000)
+    results = [{"id": "ok", "title": "Officer John - Stay (feat. X) [Official Audio] (Explicit)",
+                "duration": 200, "view_count": 9_000}]
+    assert m._find_best_match(results, track)["id"] == "ok"
+
+
+def test_live_and_acoustic_rejected_for_studio_original():
+    m = _matcher()
+    track = _track(name="Stay", artist="Officer John", duration_ms=200000)
+    results = [
+        {"id": "live", "title": "Officer John - Stay (Live)", "duration": 200},
+        {"id": "ac", "title": "Officer John - Stay (Acoustic)", "duration": 201},
+    ]
+    assert m._find_best_match(results, track) is None
+
+
+def test_prefers_named_remixer_among_remixes():
+    # Two same-version remix candidates; the one naming the requested remixer wins.
+    m = _matcher()
+    track = _track(name="Stay (Morgan Buckley Remix)", artist="Officer John",
+                   duration_ms=240000)
+    results = [
+        {"id": "other", "title": "Officer John - Stay (Some Other Remix)",
+         "duration": 240, "view_count": 1_000_000},
+        {"id": "right", "title": "Officer John - Stay (Morgan Buckley Remix)",
+         "duration": 241, "view_count": 50_000},
+    ]
+    assert m._find_best_match(results, track)["id"] == "right"
+
+
+def test_version_tokens_helper():
+    m = _matcher()
+    assert m._version_tokens("Stay") == frozenset()
+    assert m._version_tokens("Stay (Official Audio)") == frozenset()
+    assert "remix" in m._version_tokens("Stay (Morgan Buckley Remix)")
+    assert "live" in m._version_tokens("Stay (Live at Wembley)")
+    # 'remix' must not also register the looser 'mix'/'edit' substrings.
+    assert "mix" not in m._version_tokens("Stay (Morgan Buckley Remix)")
+    assert "edit" not in m._version_tokens("Stay (Morgan Buckley Remix)")
+    # 'Original Mix' / 'Album Version' ARE the original — no version token.
+    assert m._version_tokens("To the Disco 77 (Original Mix)") == frozenset()
+    assert m._version_tokens("Song (Album Version)") == frozenset()
+    assert m._version_tokens("Song (Original Version)") == frozenset()
+
+
+def test_original_track_accepts_original_mix_label():
+    # Spotify track has no version; YouTube labels it '(Original Mix)' — that IS
+    # the original recording and must be accepted, not rejected as a "version".
+    m = _matcher()
+    track = _track(name="To the Disco 77", artist="Move D", duration_ms=419000)
+    results = [{"id": "om", "title": "To the Disco 77 (Original Mix)",
+                "duration": 419, "uploader": "Move D - Topic", "view_count": 60_000}]
+    assert m._find_best_match(results, track)["id"] == "om"
+
+
+def test_original_mix_still_rejects_club_mix():
+    # Guard: relaxing 'Original Mix' must NOT let a genuine alternate through.
+    m = _matcher()
+    track = _track(name="To the Disco 77", artist="Move D", duration_ms=419000)
+    results = [{"id": "club", "title": "To the Disco 77 (Club Mix)",
+                "duration": 418, "uploader": "Move D - Topic"}]
+    assert m._find_best_match(results, track) is None
+
+
+# --- Search-query building + cross-query aggregation (real failures) ---------
+
+def test_query_keeps_version_qualifier():
+    # Regression: clean_search_query() used to strip '(David Penn Remix)', so the
+    # search never surfaced the right version and the version gate rejected all.
+    m = _matcher()
+    track = _track(name="1, 2, 3, 4 (David Penn Remix)", artist="Cesar De Melero")
+    queries = m.build_search_queries(track)
+    assert any("david penn remix" in q.lower() for q in queries)
+    # The plain 'artist title' query must come before any '… official audio' one.
+    plain = next(i for i, q in enumerate(queries) if q.lower().startswith("cesar de melero"))
+    official = [i for i, q in enumerate(queries) if "official audio" in q.lower()]
+    assert not official or plain < min(official)
+
+
+def test_query_adds_base_title_fallback_for_versioned_track():
+    m = _matcher()
+    track = _track(name="Infinity - Extended Mix", artist="Infinity Ink")
+    queries = [q.lower() for q in m.build_search_queries(track)]
+    # full title (with version) present...
+    assert any("extended mix" in q for q in queries)
+    # ...and a base-title fallback without the version qualifier.
+    assert any(q.strip() in ("infinity ink infinity", "infinity infinity ink") for q in queries)
+
+
+def test_artist_fallback_accepts_distinctive_title_without_artist():
+    # Label/Topic upload whose visible title omits the artist and whose channel
+    # name does not contain it. A versioned title is distinctive enough to accept.
+    m = _matcher()
+    track = _track(name="1, 2, 3, 4 (David Penn Remix)", artist="Cesar De Melero",
+                   duration_ms=202000)
+    results = [{"id": "ok", "title": "1, 2, 3, 4 (David Penn Remix)",
+                "duration": 202, "uploader": "Release - Topic"}]
+    assert m._find_best_match(results, track)["id"] == "ok"
+
+
+def test_artist_fallback_still_requires_artist_for_short_generic_title():
+    # A short, generic 2-word title must NOT be accepted without the artist —
+    # otherwise any same-length video with that title would match.
+    m = _matcher()
+    track = _track(name="Instant Crush", artist="Daft Punk", duration_ms=337000)
+    assert m._has_text_relevance("Instant Crush", track) is False
+    # but the real artist (in title or channel) still passes:
+    assert m._has_text_relevance("Instant Crush", track, uploader="Daft Punk - Topic") is True
+
+
+def test_search_track_aggregates_best_across_all_queries(monkeypatch):
+    # The systemic bug: search_track returned on the FIRST query that yielded any
+    # eligible result, so a weak early query won. It must instead gather across all
+    # queries and pick the globally best. Here the first query returns a weaker
+    # (further-duration) candidate; a later query returns the perfect one.
+    m = _matcher()
+    track = _track(name="U Won't C Me", artist="Mystic Bill", duration_ms=473000)
+
+    # Same title/artist signal on both; 'weak' is near the edge of the duration
+    # tolerance with few views, 'perfect' is exact with many views -> higher score.
+    weak = [{"id": "weak", "title": "U Won't C Me",
+             "duration": 487, "uploader": "Mystic Bill - Topic", "view_count": 1000}]
+    perfect = [{"id": "perfect", "title": "U Won't C Me",
+                "duration": 473, "uploader": "Mystic Bill - Topic", "view_count": 40000}]
+
+    calls = {"n": 0}
+
+    def fake_results(query):
+        calls["n"] += 1
+        return weak if calls["n"] == 1 else perfect
+
+    monkeypatch.setattr(m, "_search_results", fake_results)
+    url = m.search_track(track)
+    assert url == "https://www.youtube.com/watch?v=perfect"
+    assert calls["n"] > 1  # proves it did NOT stop after the first query

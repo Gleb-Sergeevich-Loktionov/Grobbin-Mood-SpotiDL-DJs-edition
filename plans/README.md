@@ -91,6 +91,69 @@ downloaded were *completely different songs*, not just wrong versions).
   whole playlist matches (`python scripts/e2e_verify.py <playlist_url>`).
 - Also bumped `Pillow` (10.1.0 fails to build on Python 3.14) and added `Unidecode`.
 
+## Round 4 — exact-version matching (#15b, DONE)
+
+Follow-up to Round 3. Round 3 stopped *completely different songs* from being
+downloaded (duration + title gates). It does **not** pin the **version**: the
+matcher still accepts the wrong *version* of the right song — e.g. for Spotify
+track `Officer John - Stay` it can download `Officer John - Stay (Morgan Buckley
+Remix)`, and vice versa.
+
+- **Plan:** `014-exact-version-track-matching.md`
+- **Root cause:** `_has_text_relevance` only checks the Spotify title words are
+  present (never the reverse), so a remix qualifier is invisible; the remix
+  penalty in `_calculate_match_score` is a soft `-10` nudge that self-disables
+  when the track itself is any kind of mix/edit, and is skipped for the
+  alt-version markers entirely. Nothing enforces version equality as a gate.
+- **Fix:** add a symmetric **version-equality hard gate** (`HARD GATE 3`) in
+  `_find_best_match` — original tracks reject version-tagged candidates; versioned
+  tracks require the same primary version keyword. Skip (return `None`) when
+  nothing qualifies. Scope: `youtube_matcher.py` + `tests/test_youtube_matching.py`
+  only.
+- **Status:** DONE (2026-06-20). Implemented `_version_tokens` / `_version_matches`
+  + `HARD GATE 3` in `_find_best_match`, plus a same-version remixer-name ranking
+  nudge. Verified by 8 new offline regression tests in
+  `tests/test_youtube_matching.py` (21 matcher tests, full suite 39, all green).
+
+| Plan | Finding | Effort | Risk | Status |
+|------|---------|--------|------|--------|
+| 014  | wrong version/remix downloaded (#15b) | M | Low–Med | DONE |
+
+## Round 5 — search recall fix (#15c, DONE)
+
+Follow-up to Round 4. The version gate (Round 4) was correct, but real tracks from
+a user playlist still failed to download. Investigation (re-fetching the user's
+known-good YouTube URLs and replaying them through the gates + `ytsearch`) proved
+the candidates passed every gate — **the search step never surfaced them**. Three
+distinct bugs:
+
+1. **Stopped on the first query that returned anything.** `search_track` returned
+   on the first of 8 query variations that yielded an eligible result, so a weak
+   early query (`… official audio`) won and the plain query that actually surfaces
+   niche/Topic uploads was never tried. **Fix:** gather candidates across ALL
+   queries, dedupe by video id, pick the globally highest score.
+2. **`clean_search_query` stripped the version from the search query.** For
+   `1, 2, 3, 4 (David Penn Remix)` the query became `… 1, 2, 3, 4`, so the right
+   version never appeared and the version gate rejected everything. **Fix:**
+   `build_search_queries` keeps the full title (version included), puts the plain
+   `artist title` query first, appends `official audio` last, and adds a
+   base-title fallback.
+3. **Artist gate too strict for label/Topic uploads.** `Cesar De Melero` vs channel
+   `Release - Topic` (artist in neither title nor channel) was rejected. **Fix:**
+   relax the artist requirement only when the FULL title matches AND the title is
+   distinctive (3+ words or carries a version keyword); short generic titles like
+   `Instant Crush` still require the artist.
+
+- **Scope:** `youtube_matcher.py` + `tests/test_youtube_matching.py` only.
+- **Verified:** 44 offline tests green; live re-run of the user's playlist went
+  from 26/32 to 30/32 with **0 "no track-correct match"** rejections (was 6). The
+  remaining 2 failures are not search problems (one track genuinely absent from
+  YouTube; one ffmpeg post-processing error — retry-able).
+
+| Plan | Finding | Effort | Risk | Status |
+|------|---------|--------|------|--------|
+| (live) | search recall: wrong/missing matches (#15c) | M | Low | DONE |
+
 ## Deferred findings (no plan)
 
 All five round-1 deferred findings (#10–#14) are now planned as 009–013. None remain

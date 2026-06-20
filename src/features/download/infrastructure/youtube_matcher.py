@@ -7,7 +7,6 @@ from typing import Optional, List, Dict, Any
 import logging
 from src.app.config import AppConfig
 from src.features.spotify.domain.repositories import SpotifyTrack
-from src.shared.lib.utils import clean_search_query
 from src.shared.lib.cache import YouTubeCache
 
 try:
@@ -22,6 +21,23 @@ logger = logging.getLogger(__name__)
 # Spotify track by more than this many seconds, is treated as a different track
 # and rejected. Correctness over recall: better to skip than grab the wrong song.
 DURATION_GATE_SECONDS = 15
+
+# Version keywords that make a recording a DIFFERENT track from the original.
+# Multi-word / more specific phrases come first so the collapse logic in
+# _version_tokens can drop the looser substrings ('mix'/'edit') they imply.
+_VERSION_KEYWORDS = (
+    'remix', 'radio edit', 'extended mix', 'extended', 'club mix', 'vip',
+    'bootleg', 'rework', 'edit', 'live', 'acoustic', 'unplugged',
+    'instrumental', 'karaoke', 'cover', 'reprise', 'demo', 'remaster',
+    'remastered', 'mono', 'nightcore', 'sped up', 'slowed', 'mix', 'version',
+)
+
+# Qualifiers that appear on legitimate ORIGINALS and must NOT count as a version
+# difference (so 'Stay (feat. X) [Official Audio]' stays "original").
+_NEUTRAL_QUALIFIERS = (
+    'feat', 'ft', 'featuring', 'official', 'audio', 'video', 'lyrics', 'lyric',
+    'hd', 'hq', '4k', 'explicit', 'clean', 'prod', 'mv', 'mp3',
+)
 
 
 class YouTubeMatcher:
@@ -72,33 +88,50 @@ class YouTubeMatcher:
         
         # Build search queries using templates
         queries = self.build_search_queries(track)
-        
+
         logger.info(f"Starting search for '{track.artist} - {track.name}' with {len(queries)} query variations")
-        
+
+        # Gather candidates from ALL queries, then pick the single best. Returning
+        # on the first query that yields *anything* (the old behavior) let a weaker
+        # early query ('… official audio') win and never reach the plain query that
+        # actually surfaces the correct video for niche/remix tracks.
+        seen_ids = set()
+        all_candidates = []  # (score, video)
+
         for idx, query in enumerate(queries, 1):
             logger.debug(f"Attempt {idx}/{len(queries)}: Searching with query: '{query}'")
-            
             try:
-                # Use yt-dlp to search
-                video_url = self._search_with_ytdlp(query, track)
-                
-                if video_url:
-                    logger.info(f"✓ Found YouTube match for '{track.name}' on attempt {idx}: {video_url}")
-                    
-                    # Cache the result
-                    if self.cache:
-                        self.cache.set(track.id, video_url)
-                    
-                    return video_url
-                else:
-                    logger.debug(f"  No acceptable match found with this query")
-            
+                results = self._search_results(query)
             except Exception as e:
                 logger.warning(f"Search failed for query '{query}': {e}")
                 continue
-        
-        logger.error(f"✗ No YouTube match found after {len(queries)} attempts for: {track.name} by {track.artist}")
-        return None
+
+            for score, video in self._eligible_candidates(results, track):
+                vid = video.get('id')
+                if vid in seen_ids:
+                    continue
+                seen_ids.add(vid)
+                all_candidates.append((score, video))
+
+        if not all_candidates:
+            logger.error(
+                f"✗ No YouTube match found after {len(queries)} attempts for: "
+                f"{track.name} by {track.artist}"
+            )
+            return None
+
+        all_candidates.sort(key=lambda x: x[0], reverse=True)
+        best_score, best_video = all_candidates[0]
+        video_url = f"https://www.youtube.com/watch?v={best_video['id']}"
+        logger.info(
+            f"✓ Best match (score {best_score:.1f}) for '{track.artist} - {track.name}' "
+            f"across {len(queries)} queries: '{best_video.get('title', 'Unknown')}' {video_url}"
+        )
+
+        if self.cache:
+            self.cache.set(track.id, video_url)
+
+        return video_url
     
     def build_search_queries(self, track: SpotifyTrack) -> List[str]:
         """
@@ -112,69 +145,61 @@ class YouTubeMatcher:
         """
         artist = track.artist
         title = track.name
-        
-        # Clean up artist and title
-        artist_clean = clean_search_query(artist)
-        title_clean = clean_search_query(title)
-        
+
+        # IMPORTANT: keep the FULL title, version qualifier included. The old code
+        # ran clean_search_query() over the title, which strips '(David Penn Remix)'
+        # etc. — so the search never surfaced the right version and HARD GATE 3
+        # later rejected everything. We only collapse whitespace, never drop the
+        # version. A separate base-title (no parens) query is added below as a
+        # fallback for tracks whose YouTube title formats the version differently.
+        full_title = re.sub(r'\s+', ' ', title).strip()
+        # Drop only a trailing "feat./ft." credit for the artist token; keep title.
+        artist_clean = re.sub(r'\s+', ' ',
+                              re.sub(r'\b(feat\.|ft\.|featuring)\b.*', '', artist, flags=re.IGNORECASE)).strip()
+
+        # Base title without any parenthetical/bracket qualifier (for the fallback
+        # queries only). e.g. 'Infinity - Extended Mix' -> 'Infinity'.
+        base_title = re.sub(r'[\(\[].*', '', full_title)
+        base_title = re.sub(r'\s*-\s*[^-]*\b(remix|edit|mix|version|dub)\b.*$', '', base_title,
+                            flags=re.IGNORECASE).strip() or full_title
+
         queries = []
-        # Расширенный список поисковых шаблонов для лучшего нахождения редких треков
-        templates = self.settings.get('search_templates', [
-            '{artist} - {title} official audio',
-            '{artist} - {title} audio',
-            '{artist} {title} lyrics',
-            '{title} {artist}',
-            # НОВЫЕ ШАБЛОНЫ для редких треков и ремиксов:
-            '{artist} {title}',  # Без дефиса
-            '"{artist}" "{title}"',  # С кавычками для точного поиска
-            '{title} {artist} official',
-            '{artist} - {title}',  # Простой формат
-        ])
-        
-        for template in templates:
-            try:
-                query = template.format(artist=artist_clean, title=title_clean)
-                queries.append(query)
-                logger.debug(f"Generated search query: {query}")
-            except KeyError as e:
-                logger.warning(f"Invalid search template: {template} - {e}")
-        
-        # Специальная обработка для ремиксов и edits
-        if '(' in title and ')' in title:
-            # Извлечь базовое название без скобок
-            base_title = title.split('(')[0].strip()
-            remix_info = title.split('(')[1].split(')')[0]
-            
-            base_title_clean = clean_search_query(base_title)
-            remix_info_clean = clean_search_query(remix_info)
-            
-            # Добавить альтернативные поиски для ремиксов
-            remix_queries = [
-                f'{artist_clean} {base_title_clean}',
-                f'{artist_clean} {base_title_clean} {remix_info_clean}',
-                f'{base_title_clean} {artist_clean}',
-                f'{artist_clean} - {base_title_clean} {remix_info_clean}',
-            ]
-            
-            for query in remix_queries:
-                queries.append(query)
-                logger.debug(f"Generated remix search query: {query}")
-        
+        seen = set()
+
+        def add(q: str) -> None:
+            q = re.sub(r'\s+', ' ', q).strip()
+            if q and q.lower() not in seen:
+                seen.add(q.lower())
+                queries.append(q)
+                logger.debug(f"Generated search query: {q}")
+
+        # Plain 'artist title' first — the probe showed it is the single most
+        # reliable query for niche tracks. 'official audio' is appended LAST because
+        # it pushes niche/Topic uploads out of the top results.
+        add(f'{artist_clean} {full_title}')
+        add(f'{artist_clean} - {full_title}')
+        add(f'{full_title} {artist_clean}')
+        add(f'"{artist_clean}" "{full_title}"')
+        # Fallbacks using the base title (helps when YouTube splits the version off
+        # the title or formats it differently than Spotify).
+        if base_title.lower() != full_title.lower():
+            add(f'{artist_clean} {base_title}')
+            add(f'{base_title} {artist_clean}')
+        # Lower-priority decorated queries last.
+        add(f'{artist_clean} - {full_title} audio')
+        add(f'{artist_clean} - {full_title} official audio')
+
         return queries
     
-    def _search_with_ytdlp(self, query: str, track: SpotifyTrack) -> Optional[str]:
-        """
-        Search YouTube using yt-dlp.
-        
-        Args:
-            query: Search query
-            track: Track object for validation
-            
-        Returns:
-            Video URL or None
+    def _search_results(self, query: str) -> List[Dict[str, Any]]:
+        """Run one YouTube search and return the raw result entries.
+
+        A failure on a single entry (e.g. an age-gated video that needs cookies)
+        must not abort the whole search — yt-dlp already skips such entries, and
+        we still get the rest. Returns [] on a hard error.
         """
         import yt_dlp
-        
+
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
@@ -184,40 +209,30 @@ class YouTubeMatcher:
             # unrelated video was accepted — the root cause of wrong downloads.
             'extract_flat': False,
             'skip_download': True,
+            # Keep going if one entry in the search fails to extract.
+            'ignoreerrors': True,
         }
-        
+
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Search for videos
-                search_results = ydl.extract_info(f"ytsearch5:{query}", download=False)
-                
-                if not search_results or 'entries' not in search_results:
-                    return None
-                
-                # Filter and rank results
-                best_match = self._find_best_match(search_results['entries'], track)
-                
-                if best_match:
-                    return f"https://www.youtube.com/watch?v={best_match['id']}"
-        
+                search_results = ydl.extract_info(f"ytsearch{self.settings['max_results']}:{query}", download=False)
+            if not search_results or 'entries' not in search_results:
+                return []
+            return [e for e in (search_results.get('entries') or []) if e]
         except Exception as e:
             logger.error(f"yt-dlp search error: {e}")
-        
-        return None
-    
-    def _find_best_match(self, results: List[Dict[str, Any]], track: SpotifyTrack) -> Optional[Dict[str, Any]]:
-        """
-        Find best matching video from search results.
-        
-        Args:
-            results: List of video results
-            track: Track object for comparison
-            
-        Returns:
-            Best matching video dict or None
+            return []
+
+    def _eligible_candidates(self, results: List[Dict[str, Any]], track: SpotifyTrack) -> List[tuple]:
+        """Apply the three hard gates and return [(score, video), …] survivors.
+
+        Gates (correctness over recall — skip beats wrong track):
+          1. duration close to the Spotify track (when known);
+          2. title/artist relevance;
+          3. version equality (original vs remix/live/edit/…).
         """
         if not results:
-            return None
+            return []
 
         track_duration = (track.duration_ms or 0) / 1000.0
         tolerance = self.settings.get('duration_tolerance', DURATION_GATE_SECONDS)
@@ -242,9 +257,7 @@ class YouTubeMatcher:
             title = video.get('title') or ''
             duration = video.get('duration') or 0
 
-            # HARD GATE 1 — duration must be verifiable and close. Spotify always
-            # provides duration_ms; a result we cannot length-check, or whose
-            # length is off, is almost certainly a different track.
+            # HARD GATE 1 — duration must be verifiable and close.
             if track_duration > 0:
                 if not duration:
                     rejected += 1
@@ -257,12 +270,17 @@ class YouTubeMatcher:
                     )
                     continue
 
-            # HARD GATE 2 — the title must actually reference this track, so a
-            # coincidentally same-length but unrelated video is never accepted.
+            # HARD GATE 2 — the title must actually reference this track.
             uploader = video.get('uploader') or video.get('channel') or ''
             if not self._has_text_relevance(title, track, uploader):
                 rejected += 1
                 logger.debug(f"  reject #{idx + 1} (title unrelated): '{title}'")
+                continue
+
+            # HARD GATE 3 — the VERSION must match (original vs remix/live/edit/…).
+            if not self._version_matches(title, track):
+                rejected += 1
+                logger.debug(f"  reject #{idx + 1} (version mismatch): '{title}'")
                 continue
 
             score = self._calculate_match_score(video, track)
@@ -270,9 +288,28 @@ class YouTubeMatcher:
             logger.debug(f"  candidate #{idx + 1} score={score:.1f} duration={duration}s: '{title}'")
 
         if not eligible:
+            logger.debug(
+                f"No track-correct match in this result set for "
+                f"'{track.artist} - {track.name}': {len(results)} results, {rejected} rejected"
+            )
+        return eligible
+
+    def _find_best_match(self, results: List[Dict[str, Any]], track: SpotifyTrack) -> Optional[Dict[str, Any]]:
+        """
+        Find best matching video from search results.
+        
+        Args:
+            results: List of video results
+            track: Track object for comparison
+            
+        Returns:
+            Best matching video dict or None
+        """
+        eligible = self._eligible_candidates(results, track)
+        if not eligible:
             logger.warning(
-                f"No track-correct match for '{track.artist} - {track.name}': "
-                f"{len(results)} results, {rejected} rejected by duration/title gates"
+                f"No track-correct match for '{track.artist} - {track.name}' "
+                f"among {len(results)} results"
             )
             return None
 
@@ -294,6 +331,61 @@ class YouTubeMatcher:
     def _word_list(text: str, min_len: int) -> List[str]:
         """Ordered whole-word tokens of at least `min_len` chars (ASCII, lower)."""
         return [w for w in re.findall(r'\w+', unidecode(text or '').lower()) if len(w) >= min_len]
+
+    @classmethod
+    def _version_tokens(cls, text: str) -> frozenset:
+        """Return the set of version keywords present in `text`.
+
+        An empty set means "original recording". Neutral qualifiers
+        (feat/official/audio/explicit/…) are never version tokens, so
+        'Stay (feat. X) [Official Audio]' is still treated as the original.
+        """
+        folded = unidecode(text or '').lower()
+        found = set()
+        for kw in _VERSION_KEYWORDS:
+            # Whole-word / phrase match (not substring), so 'mix' does not fire on
+            # 'remix' and 'edit' does not fire inside unrelated words.
+            if re.search(r'\b' + re.escape(kw) + r'\b', folded):
+                found.add(kw)
+        # 'Original Mix' / 'Original Version' / 'Album Version' etc. ARE the
+        # original recording, not an alternate version. When the loose 'mix' /
+        # 'version' / 'edit' / 'extended' tokens are qualified by 'original' or
+        # 'album', drop them so the track reads as the original. A genuine alternate
+        # (remix/club mix/radio edit/…) keeps its specific keyword and is unaffected.
+        if re.search(r'\b(original|album)\b', folded):
+            found.discard('mix')
+            found.discard('version')
+            found.discard('edit')
+            found.discard('extended')
+        # Collapse looser keywords implied by a more specific one already present,
+        # so 'remix'/'radio edit'/'extended mix' don't also register as 'mix'/'edit'.
+        if 'remix' in found:
+            found.discard('mix')
+            found.discard('edit')
+        if 'radio edit' in found or 'extended mix' in found or 'club mix' in found:
+            found.discard('mix')
+            found.discard('edit')
+            found.discard('extended')
+        return frozenset(found)
+
+    def _version_matches(self, candidate_title: str, track: SpotifyTrack) -> bool:
+        """True only if the candidate is the SAME version as the Spotify track.
+
+        Hard rule, both directions:
+          * track is original  -> candidate must carry NO version keyword;
+          * track is a version -> candidate must carry the SAME primary version keyword.
+        This is what guarantees 'Officer John - Stay' never downloads
+        'Officer John - Stay (... Remix)' and vice versa.
+        """
+        track_v = self._version_tokens(track.name)
+        cand_v = self._version_tokens(candidate_title)
+
+        if not track_v:
+            # Original wanted: reject anything carrying a version keyword.
+            return not cand_v
+
+        # Specific version wanted: candidate must share at least the primary keyword.
+        return bool(track_v & cand_v)
 
     def _has_text_relevance(self, title: str, track: SpotifyTrack, uploader: str = '') -> bool:
         """Return True if the video plausibly refers to this track.
@@ -322,6 +414,19 @@ class YouTubeMatcher:
             artist_present = any(w in title_set or w in uploader_set for w in artist_words)
         else:
             artist_present = True
+
+        # Artist fallback: some uploads (label channels, '… - Topic' auto-uploads,
+        # reposts) carry neither the artist in the visible title nor a matching
+        # channel name. Relax the artist check ONLY when the title is distinctive
+        # enough that a same-length collision is implausible: the FULL track title
+        # is present AND it is either long (3+ words) or carries a version qualifier
+        # (remix/edit/…). A short generic title like 'Instant Crush' still requires
+        # the artist. The duration + version gates remain in force either way.
+        if not artist_present and title_hits == len(title_words):
+            full_title_present = title_hits == len(title_words)
+            distinctive = len(title_words) >= 3 or bool(self._version_tokens(track.name))
+            if full_title_present and distinctive:
+                artist_present = True
 
         return title_ratio >= 0.6 and artist_present
 
@@ -391,6 +496,19 @@ class YouTubeMatcher:
                     score -= 10.0
             if 'instrumental' in title and 'instrumental' not in track.name.lower():
                 score -= 15.0
+
+        # Tie-break among same-version remix candidates: prefer the one whose title
+        # also carries the remixer name. The version gate already guarantees both
+        # are remixes; this just nudges the right remixer ahead. Ranking-only.
+        if track_is_remix and '(' in track.name:
+            paren = track.name[track.name.find('(') + 1:]
+            paren = paren.split(')')[0] if ')' in paren else paren
+            remixer_words = [
+                w for w in self._word_list(paren, min_len=3)
+                if w not in {'remix', 'edit', 'mix', 'version', 'extended', 'radio', 'club'}
+            ]
+            if remixer_words and any(w in title for w in remixer_words):
+                score += 8.0
 
         # Prefer the original studio recording over alternate renditions, unless
         # the track itself is that kind of version. Ranking-only: every candidate
